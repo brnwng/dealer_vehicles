@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Linq;
 using System.Collections;
 using Newtonsoft.Json;
+using System.Collections.Concurrent;
 
 namespace CoxApp
 {
@@ -109,9 +110,9 @@ namespace CoxApp
                 client.DefaultRequestHeaders.Accept.Clear();
                 client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-                var dealerCars = new Dictionary<int, List<Vehicle>>();
+                var dealerCars = new ConcurrentDictionary<int, List<Vehicle>>();
                 var dealers = new Hashtable();
-                var dealerIdHash = new List<int>();
+                var dealerIdList = new List<int>();
 
                 string datasetId = await GetDatasetIdAsync(client);
 
@@ -121,7 +122,7 @@ namespace CoxApp
                 {
                     var data = await System.Text.Json.JsonSerializer.DeserializeAsync<VehicleIdListResponse>(await resVehicles.Content.ReadAsStreamAsync());
 
-                    Parallel.ForEach(data.Ids.Where(x => x > 0), new ParallelOptions() { MaxDegreeOfParallelism = 3 }, vehicleId =>
+                    Parallel.ForEach(data.Ids.Where(x => x > 0), new ParallelOptions() { MaxDegreeOfParallelism = 10 }, vehicleId =>
                     {
                         var car = GetCarAsync(vehicleId, client, datasetId);
 
@@ -129,16 +130,16 @@ namespace CoxApp
                         {
                             var dealerId = car.DealerId;
 
-                            if (!dealerIdHash.Contains(dealerId))
+                            if (!dealerIdList.Contains(dealerId))
                             {
-                                dealerIdHash.Add(dealerId);
+                                dealerIdList.Add(dealerId);
                             }
 
                             AddToCarDictionary(dealerCars, car, dealerId, vehicleId);
                         }
                     });
 
-                    var dealerTasks = dealerIdHash.Select(dealerId =>
+                    var dealerTasks = dealerIdList.Select(dealerId =>
                         client.GetAsync(datasetId + "/dealers/" + dealerId));
                     var totalDealers = await Task.WhenAll(dealerTasks);
 
@@ -149,7 +150,7 @@ namespace CoxApp
                         dealers[dealerJson.DealerId] = dealerJson.Name;
                     }
 
-                    var dealerObject = dealerIdHash.Where(x => x > 0).Select(id =>
+                    var dealerObject = dealerIdList.Where(x => x > 0).Select(id =>
                     {
                         return new Dealer
                         {
@@ -169,7 +170,7 @@ namespace CoxApp
                 }
             }
 
-            static void AddToCarDictionary(Dictionary<int, List<Vehicle>> dealerCars, VehicleResponse car, int dealerId, int vehicleId)
+            static void AddToCarDictionary(ConcurrentDictionary<int, List<Vehicle>> dealerCars, VehicleResponse car, int dealerId, int vehicleId)
             {
                 if (dealerId <= 0)
                 {
@@ -195,7 +196,7 @@ namespace CoxApp
                     var newCars = new List<Vehicle>();
                     newCars.Add(newCar);
 
-                    dealerCars.Add(dealerId, newCars);
+                    dealerCars.TryAdd(dealerId, newCars);
                 }
             }
 
@@ -224,19 +225,6 @@ namespace CoxApp
                 var carRes = response.Content.ReadAsStringAsync();
                 var car = JsonConvert.DeserializeObject<VehicleResponse>(carRes.Result);
                 return car;
-            }
-
-            static DealerResponse GetDealerAsync(int dealerId, HttpClient client, string datasetId)
-            {
-                if (dealerId <= 0)
-                {
-                    return null;
-                }
-
-                var response = client.GetAsync(datasetId + "/dealers/" + dealerId).Result;
-                var res = response.Content.ReadAsStringAsync();
-                var dealer = JsonConvert.DeserializeObject<DealerResponse>(res.Result);
-                return dealer;
             }
         }
     }
